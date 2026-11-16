@@ -64,7 +64,7 @@ val packageName = if (isGooglePlay) {
 
 android {
     namespace = "com.perol.pixez"
-    compileSdk = 37
+    compileSdkVersion("android-37.0")
     ndkVersion = "28.2.13676358"
 
     val isBuildingBundle = gradle.startParameter.taskNames.any { it.lowercase().contains("bundle") }
@@ -79,11 +79,11 @@ android {
     }
 
     defaultConfig {
-        applicationId = packageName
+        applicationId = "$packageName.avoidemoji"
         minSdk = flutter.minSdkVersion
         targetSdk = 37
-        versionCode = 10010150
-        versionName = "0.9.114 Simulacrum"
+        versionCode = flutter.versionCode
+        versionName = "${flutter.versionName}-emoji.1"
         buildConfigField("boolean", "IS_GOOGLEPLAY", isGooglePlay.toString())
         ndk {
             abiFilters.addAll(arrayOf("armeabi-v7a", "arm64-v8a", "x86_64"))

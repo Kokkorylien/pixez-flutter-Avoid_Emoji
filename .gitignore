@@ -114,5 +114,10 @@ msic
 
 # Ignore Certificate
 *.pfx
+*.jks
+*.keystore
+
+# Local release artifacts; publish APKs as GitHub Release assets.
+/dist/
 
 /lib/src/generated/
