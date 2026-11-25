@@ -29,6 +29,8 @@ import 'package:pixez/er/hoster.dart';
 import 'package:pixez/er/lprinter.dart';
 import 'package:pixez/er/pixiv_image_source.dart';
 import 'package:pixez/er/toaster.dart';
+import 'package:pixez/er/reading_image.dart';
+import 'package:pixez/document_plugin.dart';
 import 'package:pixez/i18n.dart';
 import 'package:pixez/main.dart';
 import 'package:pixez/models/illust.dart';
@@ -228,10 +230,34 @@ class Fetcher {
   ) async {
     var taskPersist = await taskPersistProvider.getAccount(url);
     if (taskPersist == null) return;
-    await taskPersistProvider.update(taskPersist..status = 2);
     File file = File(savePath + Platform.pathSeparator + fileName);
-    final uint8list = await file.readAsBytes();
-    await saveStore.saveToGallery(uint8list, illusts, fileName);
+    try {
+      await readingImages.downloaded(url, file);
+      if (Platform.isAndroid) {
+        final location = await DocumentPlugin.saveOriginal(
+          url,
+          file.path,
+          applySaveFolders(illusts, fileName),
+        );
+        if (location == null) throw StateError('无法保存原图');
+        final index = illusts.metaPages.indexWhere(
+          (page) => page.imageUrls?.original == url,
+        );
+        final previews = index >= 0
+            ? ReadingImageRequest.forIllust(illusts, index).previews
+            : [illusts.imageUrls.medium, illusts.imageUrls.large];
+        await readingImages.saved(url, previews.where((value) => value.isNotEmpty));
+        try { await file.delete(); } catch (_) { /* The save itself succeeded. */ }
+      } else {
+        final uint8list = await file.readAsBytes();
+        await saveStore.saveToGallery(uint8list, illusts, fileName);
+      }
+      await taskPersistProvider.update(taskPersist..status = 2);
+    } catch (e) {
+      await _errorD(url);
+      Toaster.downloadOk('${illusts.title} 保存失败：$e');
+      return;
+    }
     Toaster.downloadOk("${illusts.title} ${I18n.of(context!).saved}");
     var job = jobMaps[url];
     if (job != null) {
@@ -363,6 +389,7 @@ entryPoint(SendMessage message) async {
                 sendPort.send(
                   IsoContactBean(state: IsoTaskState.COMPLETE, data: taskBean),
                 );
+                break;
               }
             }
           } catch (e) {

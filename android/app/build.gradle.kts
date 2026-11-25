@@ -83,7 +83,7 @@ android {
         minSdk = flutter.minSdkVersion
         targetSdk = 37
         versionCode = flutter.versionCode
-        versionName = "${flutter.versionName}-emoji.1"
+        versionName = "${flutter.versionName}-emoji.3"
         buildConfigField("boolean", "IS_GOOGLEPLAY", isGooglePlay.toString())
         ndk {
             abiFilters.addAll(arrayOf("armeabi-v7a", "arm64-v8a", "x86_64"))

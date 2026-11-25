@@ -19,6 +19,7 @@ import 'dart:math';
 import 'package:material_ui/material_ui.dart' hide SearchBar;
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:pixez/component/pixiv_image.dart';
+import 'package:pixez/component/ai_visibility_button.dart';
 import 'package:pixez/er/leader.dart';
 import 'package:pixez/i18n.dart';
 import 'package:pixez/main.dart';
@@ -77,9 +78,7 @@ class _SearchPageState extends State<SearchPage>
     if (!mounted) return;
     Navigator.push(
       context,
-      PageRouteBuilder(
-        pageBuilder: (_, __, ___) => SearchSuggestionPage(),
-      ),
+      PageRouteBuilder(pageBuilder: (_, __, ___) => SearchSuggestionPage()),
     );
   }
 
@@ -97,6 +96,7 @@ class _SearchPageState extends State<SearchPage>
       child: Row(
         mainAxisAlignment: MainAxisAlignment.spaceBetween,
         children: <Widget>[
+          const AiVisibilityButton(),
           Container(
             child: Padding(
               child: Text(

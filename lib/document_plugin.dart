@@ -18,24 +18,55 @@ import 'package:pixez/main.dart';
 
 class DocumentPlugin {
   static const platform = const MethodChannel('com.perol.dev/save');
+  static const originals = MethodChannel('com.perol.dev/original');
 
-  static Future<bool?> save(Uint8List uint8list, String fileName,
-      {bool clearOld = false, int? saveMode}) async {
+  static Future<String?> findOriginal(String url, List<String> names) =>
+      originals.invokeMethod<String>('find', {
+        'url': url,
+        'names': names,
+        'save_mode': userSetting.saveMode,
+      });
+
+  static Future<Uint8List?> readOriginal(String location) =>
+      originals.invokeMethod<Uint8List>('read', {'location': location});
+
+  static Future<String?> saveOriginal(
+    String url,
+    String sourcePath,
+    String name,
+  ) => originals.invokeMethod<String>('save', {
+    'url': url,
+    'source_path': sourcePath,
+    'name': userSetting.sanitizeFileName(name),
+    'save_mode': userSetting.saveMode,
+    'clear_old': userSetting.isClearOldFormatFile,
+  });
+
+  static Future<bool?> save(
+    Uint8List uint8list,
+    String fileName, {
+    bool clearOld = false,
+    int? saveMode,
+  }) async {
     return platform.invokeMethod<bool>('save', {
       "data": uint8list,
       "name": userSetting.sanitizeFileName(fileName),
       "save_mode": saveMode ?? userSetting.saveMode,
-      "clear_old": clearOld
+      "clear_old": clearOld,
     });
   }
 
-  static Future<bool?> saveFromPath(String sourcePath, String fileName,
-      {bool clearOld = false, int? saveMode}) async {
+  static Future<bool?> saveFromPath(
+    String sourcePath,
+    String fileName, {
+    bool clearOld = false,
+    int? saveMode,
+  }) async {
     return platform.invokeMethod<bool>('saveFromPath', {
       "source_path": sourcePath,
       "name": userSetting.sanitizeFileName(fileName),
       "save_mode": saveMode ?? userSetting.saveMode,
-      "clear_old": clearOld
+      "clear_old": clearOld,
     });
   }
 
@@ -66,8 +97,8 @@ class DocumentPlugin {
         "save_mode": saveMode ?? userSetting.saveMode,
       });
 
-  static Future<dynamic> choiceFolder({int? saveMode}) =>
-      platform.invokeMethod("choice_folder", {
-        "save_mode": saveMode ?? userSetting.saveMode,
-      });
+  static Future<dynamic> choiceFolder({int? saveMode}) => platform.invokeMethod(
+    "choice_folder",
+    {"save_mode": saveMode ?? userSetting.saveMode},
+  );
 }

@@ -1,343 +1,436 @@
+import 'dart:async';
 import 'dart:io';
 
 import 'package:bot_toast/bot_toast.dart';
 import 'package:flutter/gestures.dart';
-import 'package:material_ui/material_ui.dart';
 import 'package:flutter/services.dart';
+import 'package:material_ui/material_ui.dart';
+import 'package:path/path.dart' show join, basenameWithoutExtension;
 import 'package:path_provider/path_provider.dart';
 import 'package:photo_view/photo_view.dart';
 import 'package:photo_view/photo_view_gallery.dart';
 import 'package:pixez/clipboard_plugin.dart';
-import 'package:pixez/component/pixiv_image.dart';
+import 'package:pixez/component/reader_download_sheet.dart';
+import 'package:pixez/er/reading_image.dart';
+import 'package:pixez/i18n.dart';
 import 'package:pixez/main.dart';
 import 'package:pixez/models/illust.dart';
 import 'package:pixez/page/picture/illust_store.dart';
 import 'package:pixez/utils/haptic_util.dart';
 import 'package:share_plus/share_plus.dart';
-import 'package:path/path.dart';
 
 class PhotoZoomPage extends StatefulWidget {
   final int index;
   final Illusts illusts;
   final IllustStore illustStore;
+  final ReadingImages? images;
 
   const PhotoZoomPage({
-    Key? key,
+    super.key,
     required this.index,
     required this.illusts,
     required this.illustStore,
-  }) : super(key: key);
+    this.images,
+  });
 
   @override
-  _PhotoZoomPageState createState() => _PhotoZoomPageState();
+  State<PhotoZoomPage> createState() => _PhotoZoomPageState();
 }
 
-class _PhotoZoomPageState extends State<PhotoZoomPage> {
-  late Illusts _illusts;
-  int _index = 0;
+class _PhotoZoomPageState extends State<PhotoZoomPage>
+    with WidgetsBindingObserver {
+  static int _session = 0;
+  late int _index;
+  late PageController _pageController;
+  late List<ReadingImageRequest> _requests;
+  late ReadingImageSubscription _subscription;
+  final _hdPages = <int>{};
+  final _previewPages = <int>{};
+  final _providers = <int, ReadingImageProvider>{};
+  final _pendingImages = <int, VoidCallback>{};
+  bool _allHd = false;
+  bool _foreground = true;
+  bool _fullScreen = false;
+  bool _downloadSheetOpen = false;
+  int _resumeRevision = ++_session;
+  ReadingImages get _images => widget.images ?? readingImages;
 
   @override
   void initState() {
-    _loadSource = userSetting.zoomQuality == 1;
-    _illusts = widget.illusts;
-    _index = widget.index;
-    nowUrl = _illusts.pageCount == 1
-        ? (_loadSource
-              ? _illusts.metaSinglePage!.originalImageUrl!
-              : _illusts.imageUrls.large)
-        : (_loadSource
-              ? _illusts.metaPages[_index].imageUrls!.original
-              : _illusts.metaPages[_index].imageUrls!.large);
-
     super.initState();
-    initCache();
+    _index = widget.index;
+    _pageController = PageController(initialPage: _index);
+    _requests = List.generate(
+      widget.illusts.pageCount,
+      (index) => ReadingImageRequest.forIllust(widget.illusts, index),
+    );
+    WidgetsBinding.instance.addObserver(this);
+    _subscription = _images.watchOriginals((url) async {
+      final page = _requests.indexWhere((request) => request.original == url);
+      if (page < 0 || !mounted || _mode(page) == ReadingImageMode.preview)
+        return;
+      if (page == _index && _foreground) {
+        await _replaceProvider(page);
+      } else {
+        _providers.remove(page)?.evict();
+        setState(() {});
+      }
+    });
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    _foreground = state == AppLifecycleState.resumed;
+    _cancelPendingImages();
+    if (state == AppLifecycleState.resumed && mounted) {
+      for (final provider in _providers.values) {
+        provider.evict();
+      }
+      setState(() {
+        _providers.clear();
+        _resumeRevision = ++_session;
+      });
+    }
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    _subscription.cancel();
+    _cancelPendingImages();
+    _pageController.dispose();
+    for (final provider in _providers.values) {
+      provider.evict();
+    }
     if (_fullScreen)
-      SystemChrome.setEnabledSystemUIMode(
-        SystemUiMode.manual,
-        overlays: SystemUiOverlay.values,
-      );
+      SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
     super.dispose();
   }
 
-  initCache() async {
-    var fileInfo = await pixivCacheManager!.getFileFromCache(
-      nowUrl,
+  ReadingImageMode _mode(int index) => _previewPages.contains(index)
+      ? ReadingImageMode.preview
+      : _allHd || _hdPages.contains(index)
+      ? ReadingImageMode.original
+      : ReadingImageMode.automatic;
+
+  bool _isHd(int index) {
+    if (!_pendingImages.containsKey(index)) {
+      final displayed = _providers[index]?.isOriginal;
+      if (displayed != null) return displayed;
+    }
+    return _mode(index) != ReadingImageMode.preview &&
+        (_mode(index) == ReadingImageMode.original ||
+            _providers[index]?.isOriginal == true);
+  }
+
+  ReadingImageProvider _provider(int index) =>
+      _providers.putIfAbsent(index, () => _newProvider(index));
+
+  ReadingImageProvider _newProvider(int index) => ReadingImageProvider(
+    _requests[index],
+    images: _images,
+    revision: _images.revisionOf(_requests[index].original) + _resumeRevision,
+    mode: _mode(index),
+    onDecoded: () {
+      if (mounted) setState(() {});
+    },
+  );
+
+  void _cancelPendingImages() {
+    final pending = _pendingImages.values.toList();
+    _pendingImages.clear();
+    for (final cancel in pending) {
+      cancel();
+    }
+  }
+
+  Future<void> _replaceProvider(int index) async {
+    _pendingImages.remove(index)?.call();
+    final provider = _newProvider(index);
+    final stream = provider.resolve(createLocalImageConfiguration(context));
+    final ready = Completer<bool>();
+    final cancelled = Completer<void>();
+    final listener = ImageStreamListener(
+      (info, _) {
+        info.dispose();
+        if (!ready.isCompleted) ready.complete(true);
+      },
+      onError: (Object error, StackTrace? stack) {
+        if (!ready.isCompleted) ready.complete(false);
+      },
     );
-    if (mounted)
-      setState(() {
-        shareShow = fileInfo != null;
+    void cancel() {
+      if (cancelled.isCompleted) return;
+      cancelled.complete();
+      stream.removeListener(listener);
+      if (!ready.isCompleted) ready.complete(false);
+      if (!identical(_providers[index], provider)) provider.evict();
+    }
+
+    _pendingImages[index] = cancel;
+    stream.addListener(listener);
+    try {
+      final decoded = await ready.future;
+      if (!mounted || !identical(_pendingImages[index], cancel)) return;
+      if (!decoded) {
+        BotToast.showText(text: '无法切换画质，已保留当前图片');
+        return;
+      }
+      final old = _providers[index];
+      setState(() => _providers[index] = provider);
+      // Keep the decoded stream alive until PhotoView has adopted it. This
+      // also works for originals too large for Flutter's normal image cache.
+      await Future.any([WidgetsBinding.instance.endOfFrame, cancelled.future]);
+      old?.evict();
+    } finally {
+      if (identical(_pendingImages[index], cancel)) {
+        _pendingImages.remove(index);
+        if (mounted) setState(() {});
+      }
+      cancel();
+    }
+  }
+
+  void _enableHd({bool all = false}) {
+    HapticUtil.selectionClick();
+    setState(() {
+      if (all) {
+        _allHd = true;
+        _hdPages.clear();
+        _previewPages.clear();
+        for (final index in _providers.keys.toList()) {
+          if (index != _index) _providers.remove(index)?.evict();
+        }
+      } else if (_isHd(_index)) {
+        _hdPages.remove(_index);
+        _previewPages.add(_index);
+      } else {
+        _hdPages.add(_index);
+        _previewPages.remove(_index);
+      }
+    });
+    _replaceProvider(_index);
+    if (all) BotToast.showText(text: '本作品全部图片已启用原图，翻到时加载');
+  }
+
+  Future<void> _bookmarkAfterSave() async {
+    if (userSetting.starAfterSave && widget.illustStore.state == 0) {
+      await widget.illustStore.star(
+        restrict: userSetting.defaultPrivateLike ? 'private' : 'public',
+      );
+    }
+  }
+
+  void _saveCurrent() {
+    saveStore.saveImage(widget.illusts, index: _index);
+    _bookmarkAfterSave();
+  }
+
+  Future<void> _showDownloads() async {
+    if (_downloadSheetOpen) return;
+    _downloadSheetOpen = true;
+    HapticUtil.heavy();
+    try {
+      await showReaderDownloadSheet(context, widget.illusts, _index, (
+        selected,
+      ) {
+        saveStore.saveChoiceImage(widget.illusts, selected);
+        _bookmarkAfterSave();
       });
+    } finally {
+      _downloadSheetOpen = false;
+    }
+  }
+
+  Future<void> _share(BuildContext buttonContext) async {
+    final request = _requests[_index];
+    try {
+      final bytes = _mode(_index) == ReadingImageMode.preview
+          ? await _images.preview(request)
+          : await _images.bytes(request);
+      final dir = Directory(
+        join((await getTemporaryDirectory()).path, 'share_cache'),
+      );
+      await dir.create(recursive: true);
+      final extension =
+          bytes.length >= 4 &&
+              bytes[0] == 0x89 &&
+              bytes[1] == 0x50 &&
+              bytes[2] == 0x4e &&
+              bytes[3] == 0x47
+          ? '.png'
+          : '.jpg';
+      final file = File(
+        join(
+          dir.path,
+          '${basenameWithoutExtension(Uri.parse(request.original).path)}$extension',
+        ),
+      );
+      await file.writeAsBytes(bytes, flush: true);
+      if (!buttonContext.mounted) return;
+      final box = buttonContext.findRenderObject() as RenderBox;
+      await SharePlus.instance.share(
+        ShareParams(
+          files: [XFile(file.path)],
+          sharePositionOrigin: box.localToGlobal(Offset.zero) & box.size,
+        ),
+      );
+    } catch (_) {
+      BotToast.showText(text: '无法读取图片，请重试');
+    }
   }
 
   @override
   Widget build(BuildContext context) {
-    return Builder(
-      builder: (context) {
-        if (_illusts.pageCount == 1) {
-          final url = _loadSource
-              ? _illusts.metaSinglePage!.originalImageUrl!
-              : _illusts.imageUrls.large;
-          return Scaffold(
-            extendBody: true,
-            extendBodyBehindAppBar: true,
-            backgroundColor: Colors.black,
-            bottomNavigationBar: _buildBottom(context),
-            body: Container(
-              child: PhotoView(
-                filterQuality: FilterQuality.high,
-                initialScale: PhotoViewComputedScale.contained,
-                heroAttributes: PhotoViewHeroAttributes(tag: url),
-                imageProvider: PixivProvider.url(url),
-                loadingBuilder: (context, event) => _buildLoading(event),
+    return Scaffold(
+      extendBody: true,
+      extendBodyBehindAppBar: true,
+      backgroundColor: Colors.black,
+      bottomNavigationBar: _buildBottom(context),
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onLongPress: _showDownloads,
+        child: ScrollConfiguration(
+          behavior: ScrollConfiguration.of(context).copyWith(
+            dragDevices: {
+              PointerDeviceKind.touch,
+              PointerDeviceKind.stylus,
+              PointerDeviceKind.invertedStylus,
+              PointerDeviceKind.trackpad,
+              PointerDeviceKind.mouse,
+            },
+          ),
+          child: PhotoViewGallery.builder(
+            gaplessPlayback: true,
+            pageController: _pageController,
+            scrollPhysics: const BouncingScrollPhysics(),
+            itemCount: _requests.length,
+            onPageChanged: (index) {
+              final pendingPages = _pendingImages.keys.toList();
+              _cancelPendingImages();
+              for (final page in pendingPages) {
+                if (page != index) _providers.remove(page)?.evict();
+              }
+              setState(() => _index = index);
+            },
+            loadingBuilder: (context, event) => const Center(
+              child: SizedBox.square(
+                dimension: 24,
+                child: CircularProgressIndicator(),
               ),
             ),
-          );
-        } else {
-          return Scaffold(
-            extendBody: true,
-            bottomNavigationBar: _buildBottom(context),
-            extendBodyBehindAppBar: true,
-            backgroundColor: Colors.black,
-            body: ScrollConfiguration(
-              // Flutter excludes mouse from dragDevices by default (#1308).
-              behavior: ScrollConfiguration.of(context).copyWith(
-                dragDevices: {
-                  PointerDeviceKind.touch,
-                  PointerDeviceKind.stylus,
-                  PointerDeviceKind.invertedStylus,
-                  PointerDeviceKind.trackpad,
-                  PointerDeviceKind.mouse,
-                },
-              ),
-              child: PhotoViewGallery.builder(
-                scrollPhysics: const BouncingScrollPhysics(),
-                pageController: PageController(initialPage: _index),
-                builder: (BuildContext context, int index) {
-                  final url = _loadSource
-                      ? _illusts.metaPages[index].imageUrls!.original
-                      : _illusts.metaPages[index].imageUrls!.large;
-                  return PhotoViewGalleryPageOptions(
-                    imageProvider: PixivProvider.url(url),
-                    initialScale: PhotoViewComputedScale.contained,
-                    heroAttributes: PhotoViewHeroAttributes(tag: url),
-                    filterQuality: FilterQuality.high,
-                  );
-                },
-                itemCount: _illusts.metaPages.length,
-                onPageChanged: (index) async {
-                  nowUrl = _loadSource
-                      ? _illusts.metaPages[index].imageUrls!.original
-                      : _illusts.metaPages[index].imageUrls!.large;
-                  setState(() {
-                    _index = index;
-                    shareShow = false;
-                  });
-                  var file = await pixivCacheManager!.getFileFromCache(
-                    nowUrl,
-                  );
-                  if (file != null && mounted)
-                    setState(() {
-                      shareShow = true;
-                    });
-                },
-                loadingBuilder: (context, event) => _buildLoading(event),
-              ),
-            ),
-          );
-        }
-      },
-    );
-  }
-
-  String nowUrl = "";
-
-  bool show = false;
-  bool shareShow = false;
-  bool _loadSource = false;
-  bool _fullScreen = false;
-
-  Widget _buildBottom(BuildContext context) {
-    if (_fullScreen) {
-      return BottomAppBar(
-        color: Colors.transparent,
-        child: Row(
-          children: [
-            IconButton(
-              onPressed: () {
-                setState(() {
-                  _fullScreen = false;
-                });
-                SystemChrome.setEnabledSystemUIMode(
-                  SystemUiMode.manual,
-                  overlays: SystemUiOverlay.values,
-                );
-              },
-              icon: Icon(
-                Icons.fullscreen_exit,
-                color: Colors.white.withValues(alpha: 0.5),
-              ),
-            ),
-          ],
-        ),
-      );
-    }
-    return BottomAppBar(
-      color: Colors.transparent,
-      child: Visibility(
-        visible: true,
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceBetween,
-          crossAxisAlignment: CrossAxisAlignment.center,
-          children: [
-            Row(
-              children: [
-                IconButton(
-                  iconSize: 16,
-                  icon: Icon(Icons.photo_library_outlined, color: Colors.white),
-                  onPressed: () {},
-                ),
-                Text(
-                  "${_index + 1}/${widget.illusts.pageCount}",
-                  style: Theme.of(
-                    context,
-                  ).textTheme.bodyLarge!.copyWith(color: Colors.white),
-                ),
-              ],
-            ),
-            Row(
-              mainAxisAlignment: MainAxisAlignment.end,
-              children: [
-                IconButton(
-                  icon: Icon(Icons.arrow_back, color: Colors.white),
-                  onPressed: () async {
-                    Navigator.of(context).pop();
-                  },
-                ),
-                IconButton(
-                  icon: Icon(Icons.fullscreen, color: Colors.white),
+            builder: (context, index) => PhotoViewGalleryPageOptions(
+              imageProvider: _provider(index),
+              initialScale: PhotoViewComputedScale.contained,
+              filterQuality: FilterQuality.high,
+              errorBuilder: (context, error, stack) => Center(
+                child: TextButton(
                   onPressed: () {
+                    _providers.remove(index)?.evict();
                     setState(() {
-                      _fullScreen = true;
-                    });
-                    SystemChrome.setEnabledSystemUIMode(
-                      SystemUiMode.manual,
-                      overlays: [],
-                    );
-                  },
-                ),
-                if (ClipboardPlugin.supported)
-                  IconButton(
-                    icon: Icon(Icons.copy, color: Colors.white),
-                    onPressed: () =>
-                        ClipboardPlugin.copy(context, _illusts, _index),
-                  ),
-                GestureDetector(
-                  child: IconButton(
-                    icon: Icon(Icons.save_alt, color: Colors.white),
-                    onPressed: () {
-                      if (_illusts.metaPages.isNotEmpty)
-                        saveStore.saveImage(widget.illusts, index: _index);
-                      else
-                        saveStore.saveImage(widget.illusts);
-                      if (userSetting.starAfterSave &&
-                          (widget.illustStore.state == 0)) {
-                        widget.illustStore.star(
-                          restrict: userSetting.defaultPrivateLike
-                              ? "private"
-                              : "public",
-                        );
-                      }
-                    },
-                  ),
-                  onLongPress: () async {
-                    HapticUtil.heavy();
-                    if (_illusts.metaPages.isNotEmpty)
-                      saveStore.saveImage(widget.illusts, index: _index);
-                    else
-                      saveStore.saveImage(widget.illusts);
-                  },
-                ),
-                AnimatedOpacity(
-                  opacity: shareShow ? 1 : 0.5,
-                  duration: Duration(milliseconds: 500),
-                  child: Builder(
-                    builder: (context) {
-                      return IconButton(
-                        icon: Icon(Icons.share, color: Colors.white),
-                        onPressed: () async {
-                          var file = await pixivCacheManager!.getFileFromCache(
-                            nowUrl,
-                          );
-                          if (file != null) {
-                            String targetPath = join(
-                              (await getTemporaryDirectory()).path,
-                              "share_cache",
-                              basenameWithoutExtension(file.file.path) +
-                                  (nowUrl.endsWith(".png") ? ".png" : ".jpg"),
-                            );
-                            File targetFile = new File(targetPath);
-                            if (!targetFile.existsSync()) {
-                              targetFile.createSync(recursive: true);
-                            }
-                            file.file.copySync(targetPath);
-                            final box =
-                                context.findRenderObject() as RenderBox?;
-                            SharePlus.instance.share(
-                              ShareParams(
-                                files: [XFile(targetPath)],
-                                sharePositionOrigin:
-                                    box!.localToGlobal(Offset.zero) & box.size,
-                              ),
-                            );
-                          } else {
-                            BotToast.showText(text: "can not find image cache");
-                          }
-                        },
-                      );
-                    },
-                  ),
-                ),
-                IconButton(
-                  icon: Icon(
-                    !_loadSource ? Icons.hd_outlined : Icons.hd,
-                    color: Colors.white,
-                  ),
-                  onPressed: () {
-                    setState(() {
-                      _loadSource = !_loadSource;
+                      _resumeRevision = ++_session;
                     });
                   },
+                  child: Text(I18n.of(context).retry),
                 ),
-              ],
+              ),
             ),
-          ],
+          ),
         ),
       ),
     );
   }
 
-  Center _buildLoading(ImageChunkEvent? event) {
-    double value = event == null || event.expectedTotalBytes == null
-        ? 0
-        : event.cumulativeBytesLoaded / event.expectedTotalBytes!;
-    if (value == 1.0) {
-      Future.delayed(Duration(milliseconds: 500), () {
-        if (mounted) {
-          setState(() {
-            shareShow = true;
-          });
-        }
-      });
+  Widget _buildBottom(BuildContext context) {
+    if (_fullScreen) {
+      return BottomAppBar(
+        color: Colors.transparent,
+        child: Align(
+          alignment: Alignment.centerLeft,
+          child: IconButton(
+            tooltip: '退出全屏',
+            icon: const Icon(Icons.fullscreen_exit, color: Colors.white54),
+            onPressed: () {
+              setState(() => _fullScreen = false);
+              SystemChrome.setEnabledSystemUIMode(SystemUiMode.edgeToEdge);
+            },
+          ),
+        ),
+      );
     }
-    return Center(
-      child: Container(
-        width: 20.0,
-        height: 20.0,
-        child: CircularProgressIndicator(value: value),
+    return BottomAppBar(
+      color: Colors.transparent,
+      padding: const EdgeInsets.symmetric(horizontal: 4),
+      child: Row(
+        children: [
+          Text(
+            '${_index + 1}/${_requests.length}',
+            style: const TextStyle(color: Colors.white),
+          ),
+          const Spacer(),
+          Flexible(
+            flex: 8,
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: [
+                  IconButton(
+                    icon: const Icon(Icons.arrow_back, color: Colors.white),
+                    onPressed: () => Navigator.pop(context),
+                  ),
+                  IconButton(
+                    icon: const Icon(Icons.fullscreen, color: Colors.white),
+                    onPressed: () {
+                      setState(() => _fullScreen = true);
+                      SystemChrome.setEnabledSystemUIMode(
+                        SystemUiMode.manual,
+                        overlays: [],
+                      );
+                    },
+                  ),
+                  if (ClipboardPlugin.supported)
+                    IconButton(
+                      icon: const Icon(Icons.copy, color: Colors.white),
+                      onPressed: () =>
+                          ClipboardPlugin.copy(context, widget.illusts, _index),
+                    ),
+                  Tooltip(
+                    message: '下载当前图片，长按多选下载',
+                    triggerMode: TooltipTriggerMode.manual,
+                    child: GestureDetector(
+                      onLongPress: _showDownloads,
+                      child: IconButton(
+                        icon: const Icon(Icons.save_alt, color: Colors.white),
+                        onPressed: _saveCurrent,
+                      ),
+                    ),
+                  ),
+                  Builder(
+                    builder: (context) => IconButton(
+                      tooltip: I18n.of(context).share,
+                      icon: const Icon(Icons.share, color: Colors.white),
+                      onPressed: () => _share(context),
+                    ),
+                  ),
+                  Tooltip(
+                    message: '点按切换原图／低清，长按全部图片原图',
+                    triggerMode: TooltipTriggerMode.manual,
+                    child: GestureDetector(
+                      onLongPress: () => _enableHd(all: true),
+                      child: IconButton(
+                        icon: Icon(
+                          _isHd(_index) ? Icons.hd : Icons.hd_outlined,
+                          color: Colors.white,
+                        ),
+                        onPressed: _enableHd,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }

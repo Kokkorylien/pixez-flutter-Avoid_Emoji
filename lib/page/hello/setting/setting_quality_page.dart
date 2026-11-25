@@ -187,13 +187,7 @@ class _SettingQualityPageState extends State<SettingQualityPage>
                 ListTile(
                   leading: const Icon(Icons.zoom_out_map),
                   title: Text(I18n.of(context).large_preview_zoom_quality),
-                  trailing: SettingSelectMenu(
-                    index: userSetting.zoomQuality,
-                    items: [I18n.of(context).large, I18n.of(context).source],
-                    onChange: (index) {
-                      userSetting.change(index);
-                    },
-                  ),
+                  subtitle: const Text('默认低清，已有原图自动使用；点按 HD 加载当前原图，长按 HD 对本作品全部图片启用原图。'),
                 ),
                 ListTile(
                   leading: const Icon(Icons.home),

@@ -25,9 +25,29 @@
 可以正常保存文件到该卡。登录、空格命名及三种 emoji 处理模式均已实机确认有效。
 具体范围见[验证记录](docs/VALIDATION.md)。
 
+当前定制版为 **1.9.89-emoji.3**，最低 Android 7.0。应用名为 PixEz Emoji，
+包名 `com.perol.pixez.avoidemoji`，可与原版共存，也可覆盖此前定制版保留数据。
+
+相对初始上游版本，还增加了以下阅读功能（安卓 Material 界面）：
+
+- 默认普通预览，自动复用已缓存或已保存到下载目录的原图，包括已授权的 TF/SD 卡目录。
+- 点按 HD 切换当前页原图／低清；长按 HD 对本作品全部页启用原图。手动选择低清后，下载完成不会强制切回原图。
+- 阅读中长按图片或下载按钮，即可下载当前页或多选下载，无需退出阅读。
+- 下载完成后保留旧画面到原图首帧显示，再保存和清理重复缓存；保存完成不再重复切换图源。切换失败保留当前图片，低清缓存已清理时可重新加载。
+- 动态速览、推荐与搜索提供 AI 作品快捷显示／隐藏按钮，开关持久保存，取消隐藏可恢复已加载作品。
+
+完整累计改动见[相对初始版本的改动说明](docs/CUSTOMIZATION_SUMMARY.md)，
+阅读操作及验收步骤见[阅读与本地原图](docs/READER_CHANGES.md)。
+最新阅读切换观感和 TF/SD 卡原图复用仍需实机确认，自动检查结果见[验证记录](docs/VALIDATION.md)。
+
 🎵 Mili - In Hell We Live, Lament 🎵 
 
 # 下载
+
+**本分支安卓定制安装包：[GitHub Releases](https://github.com/Kokkorylien/pixez-flutter-Avoid_Emoji/releases/latest)。**
+选择 ARM64 或通用 APK 中的一个安装即可；Release 同时提供 SHA256 校验文件和安装说明。
+
+下表为上游原版的下载渠道。
 
 推荐渠道顺序为从左到右。
 

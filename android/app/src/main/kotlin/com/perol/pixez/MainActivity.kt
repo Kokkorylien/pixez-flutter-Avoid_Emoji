@@ -41,6 +41,7 @@ import com.perol.pixez.plugin.CustomTab
 import com.perol.pixez.plugin.DeepLinkPlugin
 import com.perol.pixez.plugin.JsEvalPlugin
 import com.perol.pixez.plugin.OpenSettinger
+import com.perol.pixez.plugin.OriginalImagePlugin
 import com.perol.pixez.plugin.Safer
 import com.perol.pixez.plugin.SecurePlugin
 import com.perol.pixez.plugin.SupporterPlugin
@@ -94,6 +95,7 @@ class MainActivity : FlutterActivity() {
         helplessPath = sharedPreferences.getString("flutter.store_path", null)
         saveMode = sharedPreferences.getLong("flutter.save_mode", 0).toInt()
         OpenSettinger.bindChannel(flutterEngine, this)
+        OriginalImagePlugin(this).bindChannel(flutterEngine)
         Weiss.bindChannel(flutterEngine)
         CustomTab.bindChannel(this, flutterEngine)
         Safer.bindChannel(this, flutterEngine)

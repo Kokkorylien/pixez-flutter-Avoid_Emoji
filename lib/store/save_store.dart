@@ -113,6 +113,13 @@ String applySingleFolder(Illusts illust, String baseName) {
   return baseName;
 }
 
+String applySaveFolders(Illusts illust, String baseName) {
+  if (userSetting.overSanityLevelFolder && illust.sanityLevel > 2) {
+    return 'sanity/$baseName';
+  }
+  return applySingleFolder(illust, baseName);
+}
+
 class SaveStore = _SaveStoreBase with _$SaveStore;
 
 abstract class _SaveStoreBase with Store {
@@ -304,7 +311,7 @@ abstract class _SaveStoreBase with Store {
   }) async {
     if (Platform.isAndroid || Platform.isWindows || Platform.isLinux) {
       try {
-        String targetFileName = applySingleFolder(illusts, fileName);
+        String targetFileName = applySaveFolders(illusts, fileName);
         final isExist = await DocumentPlugin.exist(targetFileName);
         if (isExist! && !redo) {
           streamController.add(
@@ -426,7 +433,6 @@ abstract class _SaveStoreBase with Store {
     final result = await JSEvalPlugin.eval(illust, func, index, memType);
     return userSetting.sanitizeFileName(result ?? "");
   }
-
 
   Future<String> _handleFileName(
     Illusts illust,

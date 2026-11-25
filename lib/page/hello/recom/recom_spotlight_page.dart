@@ -22,6 +22,8 @@ import 'package:easy_refresh/easy_refresh.dart';
 import 'package:material_ui/material_ui.dart';
 import 'package:flutter_mobx/flutter_mobx.dart';
 import 'package:pixez/component/illust_card.dart';
+import 'package:pixez/component/ai_visibility_button.dart';
+import 'package:pixez/page/picture/illust_store.dart';
 import 'package:pixez/component/pixez_default_header.dart';
 import 'package:pixez/component/pixiv_image.dart';
 import 'package:pixez/exts.dart';
@@ -92,6 +94,7 @@ class _RecomSpolightPageState extends State<RecomSpolightPage>
   }
 
   bool backToTopVisible = false;
+  List<IllustStore> _visibleStores = [];
 
   Widget buildEasyRefresh(BuildContext context) {
     return Stack(
@@ -129,8 +132,10 @@ class _RecomSpolightPageState extends State<RecomSpolightPage>
   }
 
   Widget _buildWaterFall(BuildContext context, ScrollPhysics physics) {
-    _lightingStore.iStores
-        .removeWhere((element) => element.illusts!.hateByUser());
+    final hideAI = muteStore.banAIIllust;
+    _visibleStores = _lightingStore.iStores.where((store) =>
+        !(hideAI && store.illusts!.illustAIType == 2) &&
+        !store.illusts!.hateByUser()).toList();
     return NotificationListener<ScrollNotification>(
       onNotification: (ScrollNotification notification) {
         ScrollMetrics metrics = notification.metrics;
@@ -185,7 +190,7 @@ class _RecomSpolightPageState extends State<RecomSpolightPage>
           ? userSetting.crossCount
           : userSetting.hCrossCount;
     }
-    return _lightingStore.iStores.isNotEmpty
+    return _visibleStores.isNotEmpty
         ? SliverWaterfallFlow(
             gridDelegate: SliverWaterfallFlowDelegateWithFixedCrossAxisCount(
               crossAxisCount: count,
@@ -194,10 +199,10 @@ class _RecomSpolightPageState extends State<RecomSpolightPage>
                 SliverChildBuilderDelegate((BuildContext context, int index) {
               return IllustCard(
                 lightingStore: _lightingStore,
-                store: _lightingStore.iStores[index],
-                iStores: _lightingStore.iStores,
+                store: _visibleStores[index],
+                iStores: _visibleStores,
               );
-            }, childCount: _lightingStore.iStores.length),
+            }, childCount: _visibleStores.length),
           )
         : (_lightingStore.errorMessage?.isNotEmpty == true
             ? SliverToBoxAdapter(
@@ -384,6 +389,7 @@ class _RecomSpolightPageState extends State<RecomSpolightPage>
           ),
           padding: EdgeInsets.only(left: 20.0),
         ),
+        const AiVisibilityButton(),
         Expanded(child: RecomUserRoad())
       ],
     );

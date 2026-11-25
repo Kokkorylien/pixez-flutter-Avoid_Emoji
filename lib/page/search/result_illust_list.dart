@@ -18,6 +18,7 @@ import 'dart:async';
 
 import 'package:bot_toast/bot_toast.dart';
 import 'package:material_ui/material_ui.dart';
+import 'package:pixez/component/ai_visibility_button.dart';
 import 'package:pixez/er/prefer.dart';
 import 'package:pixez/i18n.dart';
 import 'package:pixez/lighting/lighting_page.dart';
@@ -197,6 +198,7 @@ class _ResultIllustListState extends State<ResultIllustList> {
                       const EdgeInsets.only(top: 8.0, bottom: 8.0, right: 8.0),
                   child: Row(
                     children: [
+                      const AiVisibilityButton(),
                       _buildDateRangeButton(),
                       if (accountStore.now?.isPremium == 1)
                         Padding(
@@ -336,7 +338,7 @@ class _ResultIllustListState extends State<ResultIllustList> {
               start_date: _dateTimeRange?.start,
               end_date: _dateTimeRange?.end,
               bookmark_num: _bookmarkNumList,
-              search_ai_type: searchAIType));
+              search_ai_type: 0));
     else
       futureGet = ApiForceSource(
           futureGet: (bool e) => apiClient.getSearchIllust(
@@ -346,12 +348,12 @@ class _ResultIllustListState extends State<ResultIllustList> {
               start_date: _dateTimeRange?.start,
               end_date: _dateTimeRange?.end,
               bookmark_num: _bookmarkNumList,
-              search_ai_type: searchAIType));
+              search_ai_type: 0));
   }
 
   void _buildShowBottomSheet(BuildContext context) {
     var resultIllustSortWidget = ResultIllustSortWidget(
-        searchAIType: searchAIType,
+        searchAIType: muteStore.banAIIllust ? 1 : 0,
         selectSort: selectSort,
         searchTarget: searchTarget,
         ugoiraFilter: ugoiraFilter,
@@ -375,6 +377,7 @@ class _ResultIllustListState extends State<ResultIllustList> {
             required UgoiraFilter ugoiraFilter}) {
           setState(() {
             this.searchAIType = searchAIType;
+            muteStore.changeBanAI(searchAIType == 1);
             this.searchTarget = searchTarget;
             this.selectSort = selectSort;
             this.ugoiraFilter = ugoiraFilter;
